@@ -45,3 +45,23 @@ resource "aws_subnet" "subnet_a" {
   availability_zone = "ap-southeast-1b"
 }
 
+# creating igw for subnet a as stated in the req
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+}
+
+# to create routing table 
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.main.id
+  
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+}
+
+# https://registry.terraform.io/providers/hashicorp/aws/3.6.0/docs/resources/route_table_association for subnet a
+resource "aws_route_table_association" "a" { 
+  subnet_id = aws_subnet.subnet_a.id
+  route_table_id = aws_route_table.public_rt.id
+}
