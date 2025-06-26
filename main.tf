@@ -129,13 +129,39 @@ resource "aws_instance" "nginx" {
 # followed by creating the load balancer - we avoid using the classic load balancer as it is outdated, and deprecated for new builds
 # May use an ALB since NLB doesnt support security groups. Since we use HTTP , which is at the application level, using an ALB could be best
 
+# resource 1: the alb itself - this alb must be public so that it can route traffic from the internet to my ec2 -  means that this alb must be in a public subnet
+# 
 resource "aws_alb" "web_alb" {
-  name = "web-alb"
+  name               = "web-alb"
   load_balancer_type = "application"
-  subnets = [aws_subnet.subnet_a.id]
-  security_groups = [aws_security_group.web_sg.id] # link to the SG we made earlier
+  subnets            = [aws_subnet.subnet_a.id]
+  security_groups    = [aws_security_group.web_sg.id] # link to the SG we made earlier
 }
 
-resource "aws_l" "name" {
-  
+
+# resource 2: where this alb routes traffic to - i will tell them which vpc, what protocol to use, what port etc.
+resource "aws_alb_target_group" "tg" {
+  protocol = "http"
+  name     = "nginx-tg"
+  port     = 80
+  vpc_id   = aws_vpc.main.id
+}
+
+# resource 3: attaching the aws instance nginx to the target group
+resource "aws_alb_target_group_attachment" "tga" {
+  port             = 80
+  target_group_arn = aws_alb_target_group.tg.arn
+  target_id        = aws_instance.nginx.id
+
+}
+
+# resource 4: accepts these traffic and defines the rules on what to do next
+resource "aws_alb_listener" "http" {
+  load_balancer_arn = aws_alb.web_alb.arn
+  protocol          = "http"
+  port              = 80
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_alb_target_group.tg.arn
+  }
 }
