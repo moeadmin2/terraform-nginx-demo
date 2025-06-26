@@ -65,3 +65,24 @@ resource "aws_route_table_association" "a" {
   subnet_id = aws_subnet.subnet_a.id
   route_table_id = aws_route_table.public_rt.id
 }
+
+# requirement 3 states that allowing access only from specified public CIDR range & protocols, therefore, we need to restrict access by CIDR we need to create security group rules. To allow my ec2 and the gateway created in req. 2 to accept incoming traffic
+
+
+# to allow ingress from SSH port 22 based on req3, 
+
+
+# to allow ingress from HTTP port 80 based on req3,
+
+
+# the is no restriction to block egress (outbound) traffic. adding 0.0.0.0/0 to allow everything
+
+
+
+# after creating the vpc, security group, then we create the ec2 instance as needed in req.2
+
+
+
+# followed by creating the load balancer - we avoid using the classic load balancer as it is outdated, and deprecated for new builds
+# May use an ALB since NLB doesnt support security groups. Since we use HTTP , which is at the application level, using an ALB could be best
+
