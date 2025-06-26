@@ -1,2 +1,2 @@
-This is the README for the assignment. I will state the notes
+This is the README for the assignment. Please see main.tf for comments
 
