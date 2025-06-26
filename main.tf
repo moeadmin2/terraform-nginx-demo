@@ -130,7 +130,7 @@ resource "aws_instance" "nginx" {
 # May use an ALB since NLB doesnt support security groups. Since we use HTTP , which is at the application level, using an ALB could be best
 
 # resource 1: the alb itself - this alb must be public so that it can route traffic from the internet to my ec2 -  means that this alb must be in a public subnet
-# 
+# to make things simple, the requirements did not state, but i will put this ALB into subnet A for ease of deployment since subnet A is internet facing anyway
 resource "aws_alb" "web_alb" {
   name               = "web-alb"
   load_balancer_type = "application"
@@ -164,4 +164,15 @@ resource "aws_alb_listener" "http" {
     type             = "forward"
     target_group_arn = aws_alb_target_group.tg.arn
   }
+}
+
+# due to the ec2 not able to access SSH from the incoming internet IP, I decided to add a bastion host, so the ec2 can receive traffic, just not directly as the requirements wanted (and because i used an ALB)
+# bastion host in subnet A
+
+resource "aws_instance" "bastion" {
+  ami = data.aws_ami.ubuntu_24_04.id
+  instance_type = t2.micro
+  subnet_id = aws_subnet.subnet_a.id
+  vpc_security_group_ids = [aws_security_group.web_sg.id]
+  associate_public_ip_address = true
 }
