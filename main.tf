@@ -67,9 +67,32 @@ resource "aws_route_table_association" "a" {
 }
 
 # requirement 3 states that allowing access only from specified public CIDR range & protocols, therefore, we need to restrict access by CIDR we need to create security group rules. To allow my ec2 and the gateway created in req. 2 to accept incoming traffic
-
+# to create security group
+resource "aws_security_group" "web_sg" {
+  vpc_id = aws_vpc.main.id
 
 # to allow ingress from SSH port 22 based on req3, 
+
+# ssh
+ingress {
+  from_port = 22
+  to_port = 22
+  protocol = "tcp"
+  cidr_blocks = [ "118.189.0.0/16" ]
+}
+
+# http
+ingress {
+  from_port = 80
+  to_port = 80
+  protocol = "tcp"
+  cidr_blocks = [ "" ]
+}
+
+}
+
+
+
 
 
 # to allow ingress from HTTP port 80 based on req3,
