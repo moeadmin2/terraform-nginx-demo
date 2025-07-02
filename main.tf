@@ -1,12 +1,8 @@
-
-
-
-
 # terraform setup
 terraform {
   required_providers {
     aws = {
-      source  = "hashicorp/aws" # taken from https://registry.terraform.io/providers/hashicorp/aws/latest
+      source  = "hashicorp/aws" # taken from https:#registry.terraform.io/providers/hashicorp/aws/latest
       version = "~> 6.0"
     }
   }
@@ -18,18 +14,14 @@ provider "aws" {
 }
 
 # creating a VPC
-
-# AWS doesnt assign a CIDR for this VPC, so for simplicity i will use 10.0.0.0/16
-
 resource "aws_vpc" "main" {
-  cidr_block           = "118.189.0.0/16"
-  enable_dns_support   = true # allows DNS resolution inside my VPC
-  enable_dns_hostnames = true # allows instances like ec2 inside the vpc to receive DNS hostnames from AWS
-
+  cidr_block = "118.189.0.0/16" # allows DNS resolution inside my VPC
+  
+  enable_dns_support = true
+  enable_dns_hostnames = true 
 }
 
 # subnet a inside the vpc
-
 resource "aws_subnet" "subnet_a" {
   vpc_id                  = aws_vpc.main.id # puts subnet into vpc
   cidr_block              = "10.0.1.0/24"
@@ -60,7 +52,7 @@ resource "aws_route_table" "public_rt" {
   }
 }
 
-# https://registry.terraform.io/providers/hashicorp/aws/3.6.0/docs/resources/route_table_association for subnet a
+# https:#registry.terraform.io/providers/hashicorp/aws/3.6.0/docs/resources/route_table_association for subnet a
 resource "aws_route_table_association" "a" {
   subnet_id      = aws_subnet.subnet_a.id
   route_table_id = aws_route_table.public_rt.id
@@ -75,10 +67,11 @@ resource "aws_security_group" "web_sg" {
 
   # ssh
   ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["118.189.0.0/16"] // given in the requirements
+    from_port = 22
+    to_port   = 22
+    protocol  = "tcp"
+    # given in the requirements
+    cidr_blocks = ["118.189.0.0/16"]
   }
 
   # to allow ingress from HTTP port 80 based on req3,
@@ -87,7 +80,8 @@ resource "aws_security_group" "web_sg" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["118.189.0.0/16", "116.206.0.0/16", "223.25.0.0/16"] // given in the requirements
+    # given in the requirements
+    cidr_blocks = ["118.189.0.0/16", "116.206.0.0/16", "223.25.0.0/16"] 
   }
 }
 
@@ -98,19 +92,17 @@ resource "aws_security_group" "web_sg" {
 
 data "aws_ami" "ubuntu_24_04" {  # if the question specifically want 24.04 LTS OS
   most_recent = true             # as tested in aws, get the latest compatible ami
-  owners      = ["099720109477"] # referenced from here: https://documentation.ubuntu.com/aws/aws-how-to/instances/find-ubuntu-images/ canonical should be official publisher
-
+  owners      = ["099720109477"] # referenced from here: https:#documentation.ubuntu.com/aws/aws-how-to/instances/find-ubuntu-images/ canonical should be official publisher
 
   filter {
     name   = "name"
-    values = "ubuntu/images/hvm-ssd/ubuntu-xenial-20.08-amd64-server-*" # sources - https://discourse.ubuntu.com/t/search-and-launch-ubuntu-22-04-in-aws-using-cli/27986 https://stackoverflow.com/questions/63899082/terraform-list-of-ami-specific-to-ubuntu-20-08-lts-aws
+    values = "ubuntu/images/hvm-ssd/ubuntu-xenial-20.08-amd64-server-*" # sources - https:#discourse.ubuntu.com/t/search-and-launch-ubuntu-22-04-in-aws-using-cli/27986 https:#stackoverflow.com/questions/63899082/terraform-list-of-ami-specific-to-ubuntu-20-08-lts-aws
   }
 
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
   }
-
 }
 
 resource "aws_instance" "nginx" {
@@ -122,57 +114,66 @@ resource "aws_instance" "nginx" {
 
   # to add custom shell script since i need to deploy this nginx service with the docker container and customise the nginx config to display my name on default page
   user_data = "#!/bin/bash\n apt update -y \n apt install -y docker.io \n systemctl start docker \n docker run -d --name nginx -p 80:80 nginx \n echo \"<h1>Glenn Yeo</h1>\" > index.html \n docker exec -i nginx /bin/bash -c 'cat > /usr/share/nginx/html/index.html' < index.html"
-
 }
-
 
 # followed by creating the load balancer - we avoid using the classic load balancer as it is outdated, and deprecated for new builds
-# May use an ALB since NLB doesnt support security groups. Since we use HTTP , which is at the application level, using an ALB could be best
-
-# resource 1: the alb itself - this alb must be public so that it can route traffic from the internet to my ec2 -  means that this alb must be in a public subnet
-# to make things simple, the requirements did not state, but i will put this ALB into subnet A for ease of deployment since subnet A is internet facing anyway
-resource "aws_alb" "web_alb" {
-  name               = "web-alb"
-  load_balancer_type = "application"
-  subnets            = [aws_subnet.subnet_a.id]
-  security_groups    = [aws_security_group.web_sg.id] # link to the SG we made earlier
+# after consultation, we will use an NLB instead, 
+resource "aws_lb" "web_nlb" {
+  name = "web-nlb"
+  internal = false
+  load_balancer_type = "network"
+  subnets = [ aws_subnet.subnet_a.id ]
+  enable_deletion_protection = false
 }
 
-
-# resource 2: where this alb routes traffic to - i will tell them which vpc, what protocol to use, what port etc.
-resource "aws_alb_target_group" "tg" {
-  protocol = "http"
-  name     = "nginx-tg"
-  port     = 80
-  vpc_id   = aws_vpc.main.id
+# adding target group for SSH
+resource "aws_lb_target_group" "tg_ssh" {
+  name = "ssh-target-group"
+  port = 22
+  protocol = "TCP"
+  vpc_id = aws_vpc.main.id
+  target_type = "instance"
 }
 
-# resource 3: attaching the aws instance nginx to the target group
-resource "aws_alb_target_group_attachment" "tga" {
-  port             = 80
-  target_group_arn = aws_alb_target_group.tg.arn
-  target_id        = aws_instance.nginx.id
-
+# adding target group for HTTP
+resource "aws_lb_target_group" "tg_http" {
+  name = "http-target-group"
+  port = 80
+  protocol = "HTTP"
+  vpc_id = aws_vpc.main.id
+  target_type = "instance"
 }
 
-# resource 4: accepts these traffic and defines the rules on what to do next
-resource "aws_alb_listener" "http" {
-  load_balancer_arn = aws_alb.web_alb.arn
-  protocol          = "http"
-  port              = 80
+resource "aws_lb_target_group_attachment" "ssh_attachment" {
+  target_id = aws_instance.nginx.id
+  target_group_arn = aws_lb_target_group.tg_ssh.arn
+  port = 22
+}
+
+resource "aws_lb_target_group_attachment" "http_attachment" {
+  target_id = aws_instance.nginx.id
+  target_group_arn = aws_lb_target_group.tg_http.arn
+  port = 80
+}
+
+resource "aws_lb_listener" "ssh_listener" {
+  load_balancer_arn = aws_lb.web_nlb.arn
+  port = 22
+  protocol = "TCP"
+
   default_action {
-    type             = "forward"
-    target_group_arn = aws_alb_target_group.tg.arn
+    type = "forward"
+    target_group_arn = aws_lb_target_group.tg_ssh.arn  
   }
 }
 
-# due to the ec2 not able to access SSH from the incoming internet IP, I decided to add a bastion host, so the ec2 can receive traffic, just not directly as the requirements wanted (and because i used an ALB)
-# bastion host in subnet A
+resource "aws_lb_listener" "http_listener" {
+  load_balancer_arn = aws_lb.web_nlb.arn
+  port = 80
+  protocol = "HTTP"
 
-resource "aws_instance" "bastion" {
-  ami = data.aws_ami.ubuntu_24_04.id
-  instance_type = t2.micro
-  subnet_id = aws_subnet.subnet_a.id
-  vpc_security_group_ids = [aws_security_group.web_sg.id]
-  associate_public_ip_address = true
+  default_action {
+    type = "forward"
+    target_group_arn = aws_lb_target_group.tg_http.arn 
+  }
 }
