@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "TFLint",
+            "type": "shell",
+            "command": "tflint --init && tflint",
+            "group": "build"
+        },
+        {
+            "label": "tfsec",
+            "type": "shell",
+            "command": "tfsec .",
+            "group": "build"
+        },
+        {
+            "label": "Terrascan",
+            "type": "shell",
+            "command": "terrascan scan -f .",
+            "group": "build"
+        }
+    ]
+}
