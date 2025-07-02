@@ -16,9 +16,9 @@ provider "aws" {
 # creating a VPC
 resource "aws_vpc" "main" {
   cidr_block = "118.189.0.0/16" # allows DNS resolution inside my VPC
-  
-  enable_dns_support = true
-  enable_dns_hostnames = true 
+
+  enable_dns_support   = true
+  enable_dns_hostnames = true
 }
 
 # subnet a inside the vpc
@@ -77,11 +77,18 @@ resource "aws_security_group" "web_sg" {
   # to allow ingress from HTTP port 80 based on req3,
   # http
   ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
+    from_port = 80
+    to_port   = 80
+    protocol  = "tcp"
     # given in the requirements
-    cidr_blocks = ["118.189.0.0/16", "116.206.0.0/16", "223.25.0.0/16"] 
+    cidr_blocks = ["118.189.0.0/16", "116.206.0.0/16", "223.25.0.0/16"]
+  }
+
+  egress = {
+    from_port = 0
+    to_port = 0
+    protocol = 0
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
@@ -96,7 +103,7 @@ data "aws_ami" "ubuntu_24_04" {  # if the question specifically want 24.04 LTS O
 
   filter {
     name   = "name"
-    values = "ubuntu/images/hvm-ssd/ubuntu-xenial-20.08-amd64-server-*" # sources - https:#discourse.ubuntu.com/t/search-and-launch-ubuntu-22-04-in-aws-using-cli/27986 https:#stackoverflow.com/questions/63899082/terraform-list-of-ami-specific-to-ubuntu-20-08-lts-aws
+    values = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-*-amd64-server-*"
   }
 
   filter {
@@ -111,69 +118,89 @@ resource "aws_instance" "nginx" {
   subnet_id                   = aws_subnet.subnet_b.id
   vpc_security_group_ids      = [aws_security_group.web_sg.id]
   associate_public_ip_address = false
-
+  key_name                    = "my-ssh-key"
   # to add custom shell script since i need to deploy this nginx service with the docker container and customise the nginx config to display my name on default page
-  user_data = "#!/bin/bash\n apt update -y \n apt install -y docker.io \n systemctl start docker \n docker run -d --name nginx -p 80:80 nginx \n echo \"<h1>Glenn Yeo</h1>\" > index.html \n docker exec -i nginx /bin/bash -c 'cat > /usr/share/nginx/html/index.html' < index.html"
+  user_data = <<-EOF
+#!/bin/bash
+set -e
+
+apt update -y # update package index
+apt install -y docker.io # install docker
+
+# Enable and start Docker
+systemctl enable docker 
+systemctl start docker
+
+# Start Nginx container
+docker run -d --name nginx -p 80:80 nginx
+
+# Sleep awhile
+sleep 5
+
+# Replace default Nginx homepage with custom content
+echo "<h1>Glenn Yeo</h1>" > /tmp/index.html
+docker cp /tmp/index.html nginx:/usr/share/nginx/html/index.html
+EOF
 }
 
 # followed by creating the load balancer - we avoid using the classic load balancer as it is outdated, and deprecated for new builds
 # after consultation, we will use an NLB instead, 
 resource "aws_lb" "web_nlb" {
-  name = "web-nlb"
-  internal = false
-  load_balancer_type = "network"
-  subnets = [ aws_subnet.subnet_a.id ]
+  name                       = "web-nlb"
+  internal                   = false
+  load_balancer_type         = "network"
+  subnets                    = [aws_subnet.subnet_a.id]
   enable_deletion_protection = false
 }
 
 # adding target group for SSH
 resource "aws_lb_target_group" "tg_ssh" {
-  name = "ssh-target-group"
-  port = 22
-  protocol = "TCP"
-  vpc_id = aws_vpc.main.id
+  name        = "ssh-target-group"
+  port        = 22
+  protocol    = "TCP"
+  vpc_id      = aws_vpc.main.id
   target_type = "instance"
 }
 
 # adding target group for HTTP
 resource "aws_lb_target_group" "tg_http" {
-  name = "http-target-group"
-  port = 80
-  protocol = "HTTP"
-  vpc_id = aws_vpc.main.id
+  name        = "http-target-group"
+  port        = 80
+  protocol    = "TCP"
+  vpc_id      = aws_vpc.main.id
   target_type = "instance"
 }
 
 resource "aws_lb_target_group_attachment" "ssh_attachment" {
-  target_id = aws_instance.nginx.id
+  target_id        = aws_instance.nginx.id
   target_group_arn = aws_lb_target_group.tg_ssh.arn
-  port = 22
+  port             = 22
 }
 
 resource "aws_lb_target_group_attachment" "http_attachment" {
-  target_id = aws_instance.nginx.id
+  target_id        = aws_instance.nginx.id
   target_group_arn = aws_lb_target_group.tg_http.arn
-  port = 80
+  port             = 80
 }
 
 resource "aws_lb_listener" "ssh_listener" {
   load_balancer_arn = aws_lb.web_nlb.arn
-  port = 22
-  protocol = "TCP"
+  port              = 22
+  protocol          = "TCP"
 
   default_action {
-    type = "forward"
-    target_group_arn = aws_lb_target_group.tg_ssh.arn  
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tg_ssh.arn
   }
 }
 
 resource "aws_lb_listener" "http_listener" {
   load_balancer_arn = aws_lb.web_nlb.arn
-  port = 80
-  protocol = "HTTP"
+  port              = 80
+  protocol          = "TCP"
 
   default_action {
-    type = "forward"
-    target_group_arn = aws_lb_target_group.tg_http.arn 
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tg_http.arn
   }
 }
