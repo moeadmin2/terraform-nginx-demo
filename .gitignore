@@ -2,3 +2,9 @@
 terraform.tfstate
 terraform.tfstate.backup
 terraform.lock.hcl
+
+
+~/.ssh/my-ssh-key
+id_rsa
+id_rsa.pub
+*.pem
