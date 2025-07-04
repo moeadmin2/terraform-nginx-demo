@@ -240,7 +240,7 @@ resource "aws_security_group" "bastion_sg" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["158.140.141.64/32"] # my own IP address - testing purposes
+    cidr_blocks = ["158.140.x.x/32"] # my own IP address - testing purposes
   }
 
   egress {
