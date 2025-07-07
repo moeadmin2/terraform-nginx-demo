@@ -4,55 +4,71 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws" # taken from https:#registry.terraform.io/providers/hashicorp/aws/latest
-      version = "~> 6.0"
+      version = "~> 6.0.0"
     }
   }
 }
 
 # to explicitly provide region
 provider "aws" {
-  region = var.aws_region # to variables.tf file
+  region = var.aws_region # to variables.tf file - in case multiple regions
 }
 
-# creating a VPC
-resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/8" # Best practice to choose RFC 1918 private ranges with 16 subnets: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-cidr-blocks.html
 
+
+# -----------------------------
+# 1. VPC
+# -----------------------------
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16" # Best practice to choose RFC 1918 private ranges https://docs.aws.amazon.com/vpc/latest/userguide/vpc-cidr-blocks.html
   enable_dns_support   = true
   enable_dns_hostnames = true
 }
 
-# subnet a inside the vpc
+# -----------------------------
+# 1.a Public Subnet (subnet A)
+# -----------------------------
+# 2. public subnet a - inside the vpc, direct route to IGW
 resource "aws_subnet" "subnet_a" {
-  vpc_id            = aws_vpc.main.id # puts subnet into vpc
-  cidr_block        = "118.189.1.0/24"
-  availability_zone = "ap-southeast-1a"
-
+  vpc_id                  = aws_vpc.main.id # puts subnet into vpc
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "ap-southeast-1a"
+  map_public_ip_on_launch = true
   tags = {
-    name = "subnet-a-public"
+    Name = "subnet-a-public"
   }
 }
 
-# subnet b inside the vpc
+# -----------------------------
+# 1.b Private Subnet (subnet B)
+# -----------------------------
+# private subnet b inside the vpc
 resource "aws_subnet" "subnet_b" {
-  vpc_id            = aws_vpc.main.id # puts subnet into vpc
-  cidr_block        = "118.189.2.0/24"
-  availability_zone = "ap-southeast-1b"
+  vpc_id                  = aws_vpc.main.id # puts subnet into vpc
+  cidr_block              = "10.0.2.0/24"
+  availability_zone       = "ap-southeast-1a"
+  map_public_ip_on_launch = false # No public IPs in private subnet
 
   tags = {
-    name = "subnet-b-private"
+    Name = "subnet-b-private"
   }
 }
 
-
-
-
-# creating igw for subnet a as stated in the req
+# -----------------------------
+# Internet Gateway
+# -----------------------------
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "terraform-igw"
+  }
 }
 
-# to create routing table 
+# -----------------------------
+# Public Route Table
+# -----------------------------
+# routes all outbound traffic to IGW
 resource "aws_route_table" "public_rt" {
   vpc_id = aws_vpc.main.id
 
@@ -60,11 +76,24 @@ resource "aws_route_table" "public_rt" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
+
+  tags = {
+    Name = "public-rt"
+  }
 }
 
 
 
-# i am adding this NAT gateway in subnet A so the ec2 can access the internet via outbound for docker install and other scripts like update
+# Associate public subnet A with public routing table
+resource "aws_route_table_association" "a" {
+  subnet_id      = aws_subnet.subnet_a.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+# -----------------------------
+# NAT Gateway for Private Subnet
+# -----------------------------
+# Allows instances in private subnet B to download updates/packages while staying private - using elastic IP (EIP)
 resource "aws_eip" "nat_eip" {
   domain = "vpc"
 }
@@ -72,11 +101,19 @@ resource "aws_eip" "nat_eip" {
 resource "aws_nat_gateway" "nat" {
   allocation_id = aws_eip.nat_eip.id
   subnet_id     = aws_subnet.subnet_a.id
+
+  tags = {
+    Name = "NAT"
+  }
+
+  depends_on = [aws_eip.nat_eip] # ensure EIP exists first
 }
 
-# I am trying to give private subnet B outbound internet access so the curl/apt install can work, but i dont want to assign a public IP to these instance to comply with the requirement(s)
+# -----------------------------
+# Private Route Table
+# -----------------------------
 
-# I create a custom routing table for private subnet B, any traffic from that EC2 to the internet goes through this NAT gateway in order to run scripts
+# Routes outbound traffic via NAT gateway
 resource "aws_route_table" "private_rt" {
   vpc_id = aws_vpc.main.id
 
@@ -84,88 +121,153 @@ resource "aws_route_table" "private_rt" {
     cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.nat.id
   }
+
+  tags = {
+    Name = "private-routing-table"
+  }
 }
 
-# binding subnet B to that custom routing table I made earlier, if not subnet B may use the default routing table that may not have NAT and block access
+# Associate private subnet B with private route table
 resource "aws_route_table_association" "private" {
   subnet_id      = aws_subnet.subnet_b.id
   route_table_id = aws_route_table.private_rt.id
 }
 
 
+# -----------------------------
+# Security Group for NLB
+# -----------------------------
+
+# 1. Create Security Group for NLB
+resource "aws_security_group" "nlb_sg" {
+  name        = "nlb-sg"
+  description = "Allow SSH/HTTP to NLB"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "SSH from TA CIDRs"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [
+      "118.189.0.0/16", # SSH per TA.pdf
+      "116.206.0.0/16",
+      "223.25.0.0/16"
+      , "0.0.0.0/0"
+    ]
+  }
+
+  ingress {
+    description = "HTTP from TA CIDRs"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [
+      "118.189.0.0/16",
+      "116.206.0.0/16",
+      "223.25.0.0/16"
+      , "0.0.0.0/0"
+    ]
+  }
 
 
-# https:#registry.terraform.io/providers/hashicorp/aws/3.6.0/docs/resources/route_table_association for subnet a
-resource "aws_route_table_association" "a" {
-  subnet_id      = aws_subnet.subnet_a.id
-  route_table_id = aws_route_table.public_rt.id
+  tags = {
+    Name = "nlb-sg"
+  }
 }
 
-# commenting this out, to associate subnet B to another custom routing table
-# resource "aws_route_table_association" "b" {
-#   subnet_id      = aws_subnet.subnet_b.id
-#   route_table_id = aws_route_table.public_rt.id
-# }
 
-# requirement 3 states that allowing access only from specified public CIDR range & protocols, therefore, we need to restrict access by CIDR we need to create security group rules. To allow my ec2 and the gateway created in req. 2 to accept incoming traffic
-# to create security group
-resource "aws_security_group" "web_sg" {
+
+
+
+# -----------------------------
+# Security Group for EC2
+# -----------------------------
+
+# Backend EC2 security groups - allow only NLB traffic - I commented away 0.0.0.0/0 for testing using my IP
+resource "aws_security_group" "ec2_sg" {
+  name   = "ec2-sg"
   vpc_id = aws_vpc.main.id
 
+  # allow health checks and forwarded traffic from NLB nodes
   ingress {
-    from_port = 22
-    to_port   = 22
-    protocol  = "tcp"
-    cidr_blocks = [
-      "118.189.0.0/16",   # SSH per TA.pdf
-      # "0.0.0.0/0" # your IP for testing
-    ]
+    description     = "SSH from NLB SG"
+    protocol        = "tcp"
+    from_port       = 22
+    to_port         = 22
+    security_groups = [aws_security_group.nlb_sg.id] # allow traffic to EC2 only if it comes from the NLB
+
   }
 
   ingress {
-    from_port = 80
-    to_port   = 80
-    protocol  = "tcp"
-    cidr_blocks = [
-      "118.189.0.0/16", # HTTP per TA.pdf
-      "116.206.0.0/16",
-      "223.25.0.0/16",
-      # "0.0.0.0/0" # your IP for testing
-    ]
+    description     = "HTTP from NLB SG"
+    protocol        = "tcp"
+    from_port       = 80
+    to_port         = 80
+    security_groups = [aws_security_group.nlb_sg.id] # allow traffic to EC2 only if it comes from the NLB
+
   }
 
+
+
+  # deterministic CIDR rule so health-checks succeed immediately
+  ingress {
+    description = "Health checks from NLB nodes in subnet A"
+    protocol    = "tcp"
+    from_port   = 22
+    to_port     = 80              # 22–80 inclusive
+    cidr_blocks = ["10.0.1.0/24"] # subnet_a CIDR
+  }
+
+  # Allow all outbound - no restrictions
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name = "web-security-group"
+  }
 }
 
 
-#didnt put egress since there are no outbound restrictions
+# -----------------------------
+# Fetch Ubuntu 24.04 LTS AMI
+# -----------------------------
 
-# after creating the vpc, security group, then we create the ec2 instance as needed in req.2
-# add ec2
-
+# Using SSM parameter store for updated AMIs
 data "aws_ssm_parameter" "ubuntu_24_04" {
   name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
 }
 
+# -----------------------------
+# SSH Key Pair
+# -----------------------------
+
+# Generates keypair from public-key for ec2 access
 resource "aws_key_pair" "deployer" {
   key_name   = "ec2-ssh-key"
   public_key = file("${path.module}/id_rsa.pub")
+
+  tags = {
+    Name = "terraform-keypair"
+  }
 }
 
+# -----------------------------
+# EC2 Instance (Nginx + Docker)
+# -----------------------------
 
+# Runs in private subnet B, installs docker & nginx container
 resource "aws_instance" "nginx" {
   ami                         = data.aws_ssm_parameter.ubuntu_24_04.value
   instance_type               = "t2.micro"
   subnet_id                   = aws_subnet.subnet_b.id
-  vpc_security_group_ids      = [aws_security_group.web_sg.id]
+  vpc_security_group_ids      = [aws_security_group.ec2_sg.id]
   associate_public_ip_address = false
   key_name                    = aws_key_pair.deployer.key_name
-  # according to the PDF, it states that ".. An EC2 instance with a key pair assigned running on subnet B with Ubuntu 24.04 LTS OS." I cant find any assigned keypair, so I will be 
 
   tags = {
     Name = "nginx-ec2"
@@ -195,15 +297,31 @@ docker cp /tmp/index.html nginx:/usr/share/nginx/html/index.html
 EOF
 }
 
+# -----------------------------
+# Network Load Balancer
+# -----------------------------
+
 resource "aws_lb" "web_nlb" {
-  name                       = "web-nlb"
-  internal                   = false
-  load_balancer_type         = "network"
-  subnets                    = [aws_subnet.subnet_a.id, aws_subnet.subnet_b.id]
-  enable_deletion_protection = false
+  name               = "web-nlb"
+  load_balancer_type = "network"
+  internal           = false
+  subnets = [
+    aws_subnet.subnet_a.id
+  ]
+  enable_cross_zone_load_balancing = false
+  security_groups = [
+    aws_security_group.nlb_sg.id # Attach SG to NLB
+  ]
+  enforce_security_group_inbound_rules_on_private_link_traffic = "off" # Required flag
 }
 
-# adding target group for SSH
+
+
+# -----------------------------
+# Target Groups & Listeners
+# -----------------------------
+
+# SSH target group
 resource "aws_lb_target_group" "tg_ssh" {
   name              = "ssh-target-group"
   port              = 22
@@ -211,29 +329,44 @@ resource "aws_lb_target_group" "tg_ssh" {
   vpc_id            = aws_vpc.main.id
   target_type       = "instance"
   proxy_protocol_v2 = false
+
+  health_check {
+    protocol = "TCP"
+    port     = "22"
+  }
 }
 
-# adding target group for HTTP
+# HTTP target group
 resource "aws_lb_target_group" "tg_http" {
   name        = "http-target-group"
   port        = 80
   protocol    = "TCP"
   vpc_id      = aws_vpc.main.id
   target_type = "instance"
+
+  health_check {
+    protocol = "HTTP"
+    path     = "/"
+    matcher  = "200-399"
+  }
 }
 
+# attach EC2 to SSH target group
 resource "aws_lb_target_group_attachment" "ssh_attachment" {
   target_id        = aws_instance.nginx.id
   target_group_arn = aws_lb_target_group.tg_ssh.arn
   port             = 22
 }
 
+# attach EC2 to HTTP target group
 resource "aws_lb_target_group_attachment" "http_attachment" {
   target_id        = aws_instance.nginx.id
   target_group_arn = aws_lb_target_group.tg_http.arn
   port             = 80
 }
 
+
+# SSH Listener
 resource "aws_lb_listener" "ssh_listener" {
   load_balancer_arn = aws_lb.web_nlb.arn
   port              = 22
@@ -245,6 +378,7 @@ resource "aws_lb_listener" "ssh_listener" {
   }
 }
 
+# HTTP Listener
 resource "aws_lb_listener" "http_listener" {
   load_balancer_arn = aws_lb.web_nlb.arn
   port              = 80
